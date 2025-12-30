@@ -1,10 +1,18 @@
 import numpy as np
-from sklearn.datasets import load_iris
+import pandas as pd
+import tkinter as tk
+from tkinter import ttk
+from sklearn.datasets import load_iris, fetch_openml, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 from collections import Counter
 
-def find_pure_intervals_single_feature(X, y, feature_idx, feature_name, class_names, min_purity=0.90, min_samples=2):
+PURITY_THRESHOLD = 0.90 # Minimum purity threshold for an interval to be considered
+MIN_SAMPLES = 2 # Minimum number of samples in an interval to be considered
+COMBINED_PURITY_THRESHOLD = 0.90 # Minimum purity threshold for a combined rule to be considered
+MAX_COMBINATIONS = 3 # Maximum number of features to combine in a rule
+
+def find_pure_intervals_single_feature(X, y, feature_idx, feature_name, class_names, min_purity=PURITY_THRESHOLD, min_samples=MIN_SAMPLES):
     """
     Find pure intervals in a single feature that classify cases.
     Uses a sliding window approach to find optimal intervals.
@@ -103,7 +111,7 @@ def find_pure_intervals_single_feature(X, y, feature_idx, feature_name, class_na
     
     return intervals
 
-def combine_intervals(intervals, X, y, class_names, max_combinations=3):
+def combine_intervals(intervals, X, y, class_names, max_combinations=MAX_COMBINATIONS, combined_purity=COMBINED_PURITY_THRESHOLD):
     """
     Combine intervals from different features to form more specific rules.
     """
@@ -128,7 +136,7 @@ def combine_intervals(intervals, X, y, class_names, max_combinations=3):
                     dominant_class = class_counts.most_common(1)[0][0]
                     purity = class_counts[dominant_class] / len(classes_in_interval)
                     
-                    if purity >= 0.9:  # Slightly lower threshold for combined rules
+                    if purity >= COMBINED_PURITY_THRESHOLD:  # Slightly lower threshold for combined rules
                         combined_rules.append({
                             'feature': f"{interval1['feature']} AND {interval2['feature']}",
                             'feature_idx': (interval1['feature_idx'], interval2['feature_idx']),
@@ -259,19 +267,132 @@ def print_rules(rules, top_n=20):
         print(f"  Informativeness Score: {rule_info['score']:.2f}")
         print()
 
-def main():
-    # Load the Iris dataset
-    print("Loading Fisher Iris dataset...")
-    iris = load_iris()
-    X = iris.data
-    y = iris.target
+def select_dataset():
+    """
+    Show a popup dialog to select which dataset to use.
+    Returns the selected dataset name or None if cancelled.
+    """
+    root = tk.Tk()
+    root.title("Select Dataset")
+    root.geometry("400x150")
+    root.resizable(False, False)
     
-    feature_names = iris.feature_names
-    class_names = iris.target_names
+    # Center the window
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() // 2) - (root.winfo_width() // 2)
+    y = (root.winfo_screenheight() // 2) - (root.winfo_height() // 2)
+    root.geometry(f"+{x}+{y}")
+    
+    selected_dataset = [None]  # Use list to allow modification in nested function
+    
+    # Label
+    label = ttk.Label(root, text="Please select a dataset:", font=("Arial", 10))
+    label.pack(pady=10)
+    
+    # Dropdown
+    dataset_var = tk.StringVar(value="Iris")
+    datasets = ["Iris", "MNIST", "Wisconsin Breast Cancer (30D)", "Wisconsin Breast Cancer (9D)"]
+    dropdown = ttk.Combobox(root, textvariable=dataset_var, values=datasets, state="readonly", width=40)
+    dropdown.pack(pady=10)
+    
+    # Buttons
+    button_frame = ttk.Frame(root)
+    button_frame.pack(pady=10)
+    
+    def on_ok():
+        selected_dataset[0] = dataset_var.get()
+        root.destroy()
+    
+    def on_cancel():
+        selected_dataset[0] = None
+        root.destroy()
+    
+    ok_button = ttk.Button(button_frame, text="OK", command=on_ok, width=10)
+    ok_button.pack(side=tk.LEFT, padx=5)
+    
+    cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel, width=10)
+    cancel_button.pack(side=tk.LEFT, padx=5)
+    
+    # Make Enter key trigger OK
+    root.bind('<Return>', lambda e: on_ok())
+    root.bind('<Escape>', lambda e: on_cancel())
+    
+    # Focus on dropdown
+    dropdown.focus()
+    
+    root.mainloop()
+    
+    return selected_dataset[0]
+
+def main():
+    # Show popup to select dataset
+    selected_dataset = select_dataset()
+    
+    if selected_dataset is None:
+        print("No dataset selected. Exiting...")
+        return
+    
+    print(f"\nSelected dataset: {selected_dataset}\n")
+    
+    # Load the selected dataset
+    X = None
+    y = None
+    feature_names = None
+    class_names = None
+    
+    if selected_dataset == "Iris":
+        print("Loading Fisher Iris dataset...")
+        iris = load_iris()
+        X = iris.data
+        y = iris.target
+        feature_names = iris.feature_names
+        class_names = iris.target_names
+        
+    elif selected_dataset == "MNIST":
+        print("Loading MNIST dataset...")
+        try:
+            mnist = fetch_openml('mnist_784', version=1, as_frame=False, parser='auto')
+            X = mnist.data
+            y = mnist.target.astype(int)
+            feature_names = [f'pixel_{i}' for i in range(X.shape[1])]
+            class_names = np.array([str(i) for i in range(10)])
+        except Exception as e:
+            print(f"Error: Could not load MNIST dataset: {e}")
+            return
+            
+    elif selected_dataset == "Wisconsin Breast Cancer (30D)":
+        print("Loading Wisconsin Breast Cancer dataset...")
+        try:
+            breast_cancer = load_breast_cancer()
+            X = breast_cancer.data
+            y = breast_cancer.target
+            feature_names = breast_cancer.feature_names
+            class_names = breast_cancer.target_names
+        except Exception as e:
+            print(f"Error: Could not load Wisconsin Breast Cancer dataset: {e}")
+            return
+            
+    elif selected_dataset == "Wisconsin Breast Cancer (9D)":
+        print("Loading Wisconsin Breast Cancer 9-dimensional dataset (wbc9.csv)...")
+        try:
+            wbc9_df = pd.read_csv('wbc9.csv')
+            X = wbc9_df.iloc[:, :-1].values
+            y_wbc9_str = wbc9_df.iloc[:, -1].values
+            unique_classes = np.unique(y_wbc9_str)
+            class_names = unique_classes
+            y = np.array([0 if label == 'Benign' else 1 for label in y_wbc9_str])
+            feature_names = wbc9_df.columns[:-1].tolist()
+        except Exception as e:
+            print(f"Error: Could not load Wisconsin Breast Cancer 9D dataset: {e}")
+            return
+    
+    if X is None or y is None:
+        print("Error: Failed to load dataset.")
+        return
     
     print(f"Dataset loaded: {X.shape[0]} samples, {X.shape[1]} features")
-    print(f"Features: {', '.join(feature_names)}")
-    print(f"Classes: {', '.join(class_names)}")
+    print(f"Features: {', '.join(feature_names[:5])}{'...' if len(feature_names) > 5 else ''}")
+    print(f"Classes: {', '.join([str(c) for c in class_names])}")
     
     # Split the data
     X_train, X_test, y_train, y_test = train_test_split(
@@ -289,7 +410,7 @@ def main():
         print(f"  Analyzing {feature_name}...")
         intervals = find_pure_intervals_single_feature(
             X_train, y_train, feature_idx, feature_name, class_names,
-            min_purity=0.90, min_samples=2
+            min_purity=PURITY_THRESHOLD, min_samples=MIN_SAMPLES
         )
         all_intervals.extend(intervals)
         print(f"    Found {len(intervals)} pure intervals")
@@ -325,9 +446,13 @@ def main():
         # Apply rule to uncovered samples
         apply_mask = mask & ~covered
         if np.sum(apply_mask) > 0:
-            class_idx = np.where(class_names == rule['class'])[0][0]
-            y_pred[apply_mask] = class_idx
-            covered[apply_mask] = True
+            # Find the class index
+            class_names_array = np.array(class_names)
+            class_idx = np.where(class_names_array == rule['class'])[0]
+            if len(class_idx) > 0:
+                class_idx = class_idx[0]
+                y_pred[apply_mask] = class_idx
+                covered[apply_mask] = True
     
     # For uncovered samples, use majority class from training
     if np.sum(~covered) > 0:
